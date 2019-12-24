@@ -23,90 +23,90 @@ module Switchman
         end
       end
 
-      def establish_connection(spec)
-        pool = super
+      # def establish_connection(spec)
+      #   pool = super
 
-        # this is the first place that the adapter would have been required; but now we
-        # need this addition ASAP since it will be called when loading the default shard below
-        if defined?(::ActiveRecord::ConnectionAdapters::PostgreSQLAdapter)
-          require "switchman/active_record/postgresql_adapter"
-          ::ActiveRecord::ConnectionAdapters::PostgreSQLAdapter.prepend(ActiveRecord::PostgreSQLAdapter)
-        end
+      #   # this is the first place that the adapter would have been required; but now we
+      #   # need this addition ASAP since it will be called when loading the default shard below
+      #   if defined?(::ActiveRecord::ConnectionAdapters::PostgreSQLAdapter)
+      #     require "switchman/active_record/postgresql_adapter"
+      #     ::ActiveRecord::ConnectionAdapters::PostgreSQLAdapter.prepend(ActiveRecord::PostgreSQLAdapter)
+      #   end
 
-        first_time = !Shard.instance_variable_get(:@default)
-        if first_time
-          # Have to cache the default shard before we insert sharding, otherwise the first access
-          # to sharding will recurse onto itself trying to access column information
-          Shard.default
+      #   first_time = !Shard.instance_variable_get(:@default)
+      #   if first_time
+      #     # Have to cache the default shard before we insert sharding, otherwise the first access
+      #     # to sharding will recurse onto itself trying to access column information
+      #     Shard.default
 
-          # automatically change config to allow for sharing connections with simple config
-          config = ::Rails.version < '5.1' ? spec.config : pool.spec.config
-          ConnectionHandler.make_sharing_automagic(config)
-          ConnectionHandler.make_sharing_automagic(Shard.default.database_server.config)
+      #     # automatically change config to allow for sharing connections with simple config
+      #     config = ::Rails.version < '5.1' ? spec.config : pool.spec.config
+      #     ConnectionHandler.make_sharing_automagic(config)
+      #     ConnectionHandler.make_sharing_automagic(Shard.default.database_server.config)
 
-          if ::Rails.version < '5.1'
-            ::ActiveRecord::Base.configurations[::Rails.env] = spec.instance_variable_get(:@config).stringify_keys
-          else
-            ::ActiveRecord::Base.configurations[::Rails.env] = config.stringify_keys
-          end
-        else
-          # this is probably wrong now
-          Shard.default.remove_instance_variable(:@name) if Shard.default.instance_variable_defined?(:@name)
-        end
+      #     if ::Rails.version < '5.1'
+      #       ::ActiveRecord::Base.configurations[::Rails.env] = spec.instance_variable_get(:@config).stringify_keys
+      #     else
+      #       ::ActiveRecord::Base.configurations[::Rails.env] = config.stringify_keys
+      #     end
+      #   else
+      #     # this is probably wrong now
+      #     Shard.default.remove_instance_variable(:@name) if Shard.default.instance_variable_defined?(:@name)
+      #   end
 
-        @shard_connection_pools ||= { [:master, Shard.default.database_server.shareable? ? ::Rails.env : Shard.default] => pool}
+      #   @shard_connection_pools ||= { [:master, Shard.default.database_server.shareable? ? ::Rails.env : Shard.default] => pool}
 
-        category = pool.spec.name.to_sym
-        proxy = ConnectionPoolProxy.new(category,
-                                        pool,
-                                        @shard_connection_pools)
-        owner_to_pool[pool.spec.name] = proxy
+      #   category = pool.spec.name.to_sym
+      #   proxy = ConnectionPoolProxy.new(category,
+      #                                   pool,
+      #                                   @shard_connection_pools)
+      #   owner_to_pool[pool.spec.name] = proxy
 
-        if first_time
-          if Shard.default.database_server.config[:prefer_slave]
-            Shard.default.database_server.shackle!
-          end
+      #   if first_time
+      #     if Shard.default.database_server.config[:prefer_slave]
+      #       Shard.default.database_server.shackle!
+      #     end
 
-          if Shard.default.is_a?(DefaultShard) && Shard.default.database_server.config[:slave]
-            Shard.default.database_server.shackle!
-            Shard.default(true)
-          end
-        end
+      #     if Shard.default.is_a?(DefaultShard) && Shard.default.database_server.config[:slave]
+      #       Shard.default.database_server.shackle!
+      #       Shard.default(true)
+      #     end
+      #   end
 
-        # reload the default shard if we just got a new connection
-        # to where the Shards table is
-        # DON'T do it if we're not the current connection handler - that means
-        # we're in the middle of switching environments, and we don't want to
-        # establish a connection with incorrect settings
-        if [:primary, :unsharded].include?(category) && self == ::ActiveRecord::Base.connection_handler && !first_time
-          Shard.default(reload: true, with_fallback: true)
-          proxy.disconnect!
-        end
+      #   # reload the default shard if we just got a new connection
+      #   # to where the Shards table is
+      #   # DON'T do it if we're not the current connection handler - that means
+      #   # we're in the middle of switching environments, and we don't want to
+      #   # establish a connection with incorrect settings
+      #   if [:primary, :unsharded].include?(category) && self == ::ActiveRecord::Base.connection_handler && !first_time
+      #     Shard.default(reload: true, with_fallback: true)
+      #     proxy.disconnect!
+      #   end
 
-        if first_time
-          # do the change for other database servers, now that we can switch shards
-          if Shard.default.is_a?(Shard)
-            DatabaseServer.all.each do |server|
-              next if server == Shard.default.database_server
+      #   if first_time
+      #     # do the change for other database servers, now that we can switch shards
+      #     if Shard.default.is_a?(Shard)
+      #       DatabaseServer.all.each do |server|
+      #         next if server == Shard.default.database_server
 
-              shard = nil
-              shard_proc = -> do
-                shard ||= server.shards.where(:name => nil).first
-                shard ||= Shard.new(:database_server => server)
-                shard
-              end
-              ConnectionHandler.make_sharing_automagic(server.config, shard_proc)
-              ConnectionHandler.make_sharing_automagic(proxy.current_pool.spec.config, shard_proc)
-            end
-          end
-          # we may have established some connections above trying to infer the shard's name.
-          # close them, so that someone that doesn't expect them doesn't try to fork
-          # without closing them
-          self.clear_all_connections!
-        end
+      #         shard = nil
+      #         shard_proc = -> do
+      #           shard ||= server.shards.where(:name => nil).first
+      #           shard ||= Shard.new(:database_server => server)
+      #           shard
+      #         end
+      #         ConnectionHandler.make_sharing_automagic(server.config, shard_proc)
+      #         ConnectionHandler.make_sharing_automagic(proxy.current_pool.spec.config, shard_proc)
+      #       end
+      #     end
+      #     # we may have established some connections above trying to infer the shard's name.
+      #     # close them, so that someone that doesn't expect them doesn't try to fork
+      #     # without closing them
+      #     self.clear_all_connections!
+      #   end
 
-        proxy
-      end
+      #   proxy
+      # end
 
       def remove_connection(spec_name)
         pool = owner_to_pool[spec_name]
